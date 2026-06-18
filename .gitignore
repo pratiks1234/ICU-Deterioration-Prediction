@@ -1,0 +1,38 @@
+
+# Clinical data and generated artifacts
+
+data/
+outputs/
+*.joblib
+*.pkl
+*.parquet
+*.csv.gz
+
+# Secrets and credentials
+
+.env
+.env.*
+!.env.example
+*.token
+.streamlit/secrets.toml
+ngrok.yml
+
+# Python files
+
+**pycache**/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# Virtual environments
+
+venv/
+.venv/
+env/
+
+# Editor and operating-system files
+
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
