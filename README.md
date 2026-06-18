@@ -1,5 +1,3 @@
-%%writefile README.md
-
 # ICU Hospital Mortality Risk Prediction
 
 An end-to-end healthcare machine learning project that estimates hospital mortality risk using patient information and clinical measurements collected during the first 24 hours of an ICU stay.
