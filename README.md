@@ -169,6 +169,20 @@ Performance at this threshold:
 
 Lowering the threshold from `0.50` to `0.38` increased detected mortality cases from 7 to 12, with an increase in false-positive warnings.
 
+## Out-of-Fold Evaluation Plots
+
+### Precision–Recall Curve
+
+![Out-of-fold precision recall curve](docs/images/precision_recall_curve.png)
+
+The dashed horizontal line represents the mortality prevalence in the demo cohort. The reduced clinical model achieved an out-of-fold AUPRC of `0.4809`.
+
+### Confusion Matrix at Threshold 0.38
+
+![Confusion matrix at threshold 0.38](docs/images/confusion_matrix_threshold_038.png)
+
+At the selected threshold of `0.38`, the model correctly identified 12 of 20 mortality cases, with 20 false-positive warnings.
+
 ## Risk Categories
 
 The Streamlit dashboard uses the following exploratory categories:
