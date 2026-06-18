@@ -1,193 +1,381 @@
 from pathlib import Path
+import json
 
 import joblib
+import numpy as np
 import pandas as pd
 import shap
 import streamlit as st
 
 
-DATA_PATH = Path("data/processed/icu_cohort_with_vitals_24h.csv")
-MODEL_PATH = Path("outputs/models/xgboost_vitals_24h_mortality.joblib")
+DATA_PATH = Path(
+    "data/processed/icu_cohort_with_vitals_labs_24h.csv"
+)
+
+OOF_PATH = Path(
+    "outputs/metrics/reduced_clinical_oof_predictions_tuned.csv"
+)
+
+THRESHOLD_PATH = Path(
+    "outputs/metrics/reduced_clinical_oof_threshold_summary.json"
+)
+
+MODEL_PATH = Path(
+    "outputs/models/xgboost_reduced_clinical_final.joblib"
+)
+
+
+FEATURE_COLUMNS = [
+    "gender",
+    "anchor_age",
+    "admission_type",
+    "first_careunit",
+    "heart_rate_mean_24h",
+    "heart_rate_max_24h",
+    "resp_rate_mean_24h",
+    "spo2_min_24h",
+    "map_min_24h",
+    "temperature_max_24h",
+    "lactate_max_24h",
+    "creatinine_latest_24h",
+    "bun_latest_24h",
+    "wbc_max_24h",
+    "platelets_min_24h",
+    "bicarbonate_min_24h",
+]
+
+
+VITAL_COLUMNS = [
+    "heart_rate_mean_24h",
+    "heart_rate_max_24h",
+    "resp_rate_mean_24h",
+    "spo2_min_24h",
+    "map_min_24h",
+    "temperature_max_24h",
+]
+
+
+LAB_COLUMNS = [
+    "lactate_max_24h",
+    "creatinine_latest_24h",
+    "bun_latest_24h",
+    "wbc_max_24h",
+    "platelets_min_24h",
+    "bicarbonate_min_24h",
+]
 
 
 st.set_page_config(
-    page_title="ICU Risk Prediction Dashboard",
+    page_title="ICU Clinical Risk Dashboard",
+    page_icon="🏥",
     layout="wide",
 )
 
 
 @st.cache_data
-def load_data():
-    return pd.read_csv(DATA_PATH)
+def load_dashboard_data():
+    cohort = pd.read_csv(DATA_PATH)
+    oof = pd.read_csv(OOF_PATH)
+
+    oof_columns = [
+        "subject_id",
+        "hadm_id",
+        "stay_id",
+        "fold",
+        "predicted_risk",
+        "predicted_class_tuned",
+    ]
+
+    return cohort.merge(
+        oof[oof_columns],
+        on=["subject_id", "hadm_id", "stay_id"],
+        how="inner",
+    )
 
 
 @st.cache_resource
 def load_model():
-    saved_model = joblib.load(MODEL_PATH)
-    return saved_model["model"], saved_model["feature_columns"]
+    return joblib.load(MODEL_PATH)
 
 
-def prepare_features(df, saved_features):
-    base_features = [
-        "gender",
-        "anchor_age",
-        "admission_type",
-        "admission_location",
-        "insurance",
-        "race",
-        "first_careunit",
-    ]
+@st.cache_data
+def load_thresholds():
+    with open(THRESHOLD_PATH) as file:
+        summary = json.load(file)
 
-    vital_features = [col for col in df.columns if col.endswith("_24h")]
-    feature_cols = base_features + vital_features
+    high_threshold = float(summary["recommended_threshold"])
+    medium_threshold = float(
+        summary["high_recall_result"]["threshold"]
+    )
 
-    X = df[feature_cols].copy()
-
-    categorical_cols = X.select_dtypes(include=["object", "string"]).columns.tolist()
-    numeric_cols = X.select_dtypes(exclude=["object", "string"]).columns.tolist()
-
-    X[categorical_cols] = X[categorical_cols].fillna("Unknown")
-
-    for col in numeric_cols:
-        X[col] = X[col].fillna(X[col].median())
-
-    X_encoded = pd.get_dummies(X, drop_first=True)
-    X_encoded = X_encoded.reindex(columns=saved_features, fill_value=0)
-
-    return X_encoded
+    return medium_threshold, high_threshold
 
 
-def risk_category(score):
-    if score < 0.10:
+def risk_category(score, medium_threshold, high_threshold):
+    if score < medium_threshold:
         return "Low Risk"
-    elif score < 0.30:
+
+    if score < high_threshold:
         return "Medium Risk"
+
     return "High Risk"
 
 
-def main():
-    st.title("ICU Patient Risk Prediction Dashboard")
+def prepare_shap_explanation(pipeline, patient_features):
+    preprocessor = pipeline.named_steps["preprocessor"]
+    classifier = pipeline.named_steps["classifier"]
 
-    if not DATA_PATH.exists():
-        st.error(f"Missing data file: {DATA_PATH}")
-        st.stop()
+    transformed = preprocessor.transform(patient_features)
 
-    if not MODEL_PATH.exists():
-        st.error(f"Missing model file: {MODEL_PATH}")
-        st.stop()
+    if hasattr(transformed, "toarray"):
+        transformed = transformed.toarray()
 
-    df = load_data()
-    model, saved_features = load_model()
+    feature_names = preprocessor.get_feature_names_out()
 
-    X_encoded = prepare_features(df, saved_features)
-    risk_scores = model.predict_proba(X_encoded)[:, 1]
+    explainer = shap.TreeExplainer(classifier)
+    shap_values = explainer.shap_values(transformed)
 
-    df_display = df.copy()
-    df_display["predicted_risk"] = risk_scores
+    if isinstance(shap_values, list):
+        shap_values = shap_values[-1]
 
-    st.sidebar.header("Patient Selection")
+    shap_values = np.asarray(shap_values)
 
-    patient_options = df_display.apply(
-        lambda row: f"subject_id={row['subject_id']} | hadm_id={row['hadm_id']} | stay_id={row['stay_id']}",
-        axis=1,
-    )
-
-    selected_option = st.sidebar.selectbox(
-        "Select ICU stay",
-        patient_options,
-    )
-
-    selected_index = patient_options[patient_options == selected_option].index[0]
-    selected_patient = df_display.loc[selected_index]
-    selected_features = X_encoded.loc[[selected_index]]
-
-    risk = selected_patient["predicted_risk"]
-    category = risk_category(risk)
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.metric("Predicted Risk", f"{risk * 100:.2f}%")
-
-    with col2:
-        st.metric("Risk Category", category)
-
-    with col3:
-        if "hospital_expire_flag" in df_display.columns:
-            st.metric("Actual Outcome", int(selected_patient["hospital_expire_flag"]))
-
-    st.subheader("Patient Information")
-
-    info_cols = [
-        "subject_id",
-        "hadm_id",
-        "stay_id",
-        "gender",
-        "anchor_age",
-        "admission_type",
-        "admission_location",
-        "insurance",
-        "race",
-        "first_careunit",
-        "last_careunit",
-    ]
-
-    existing_info_cols = [col for col in info_cols if col in df_display.columns]
-    st.dataframe(selected_patient[existing_info_cols].to_frame("Value"))
-
-    st.subheader("24-hour Vitals Summary")
-
-    vital_cols = [
-        col for col in df_display.columns
-        if col.endswith("_24h") and not col.endswith("_missing_24h")
-    ]
-
-    vital_summary = selected_patient[vital_cols].dropna().to_frame("Value")
-    st.dataframe(vital_summary)
-
-    st.subheader("SHAP Explanation")
-
-    explainer = shap.TreeExplainer(model)
-    shap_values = explainer.shap_values(selected_features)
-
-    shap_df = pd.DataFrame(
+    explanation = pd.DataFrame(
         {
-            "feature": selected_features.columns,
-            "feature_value": selected_features.iloc[0].values,
+            "feature": feature_names,
+            "feature_value": transformed[0],
             "shap_value": shap_values[0],
         }
     )
 
-    shap_df["abs_shap"] = shap_df["shap_value"].abs()
-    shap_df = shap_df.sort_values("abs_shap", ascending=False)
+    explanation["absolute_shap"] = explanation["shap_value"].abs()
 
-    st.write(
-        "Positive SHAP values push the model toward higher risk. "
-        "Negative SHAP values push the model toward lower risk."
+    return explanation.sort_values(
+        "absolute_shap",
+        ascending=False,
     )
 
-    st.dataframe(shap_df.head(15))
 
-    st.subheader("Clinical Warning Explanation")
+def clean_feature_name(name):
+    name = name.replace("numeric__", "")
+    name = name.replace("categorical__", "")
+    name = name.replace("_24h", "")
+    name = name.replace("_", " ")
 
-    top_positive = shap_df[shap_df["shap_value"] > 0].head(5)
+    return name.title()
+
+
+def main():
+    st.title("ICU Patient Clinical Risk Dashboard")
+
+    required_files = [
+        DATA_PATH,
+        OOF_PATH,
+        THRESHOLD_PATH,
+        MODEL_PATH,
+    ]
+
+    for path in required_files:
+        if not path.exists():
+            st.error(f"Missing required file: {path}")
+            st.stop()
+
+    dashboard_df = load_dashboard_data()
+    pipeline = load_model()
+
+    medium_threshold, high_threshold = load_thresholds()
+
+    dashboard_df = dashboard_df.sort_values(
+        "predicted_risk",
+        ascending=False,
+    ).reset_index(drop=True)
+
+    dashboard_df["patient_option"] = dashboard_df.apply(
+        lambda row: (
+            f"subject_id={int(row['subject_id'])} | "
+            f"hadm_id={int(row['hadm_id'])} | "
+            f"stay_id={int(row['stay_id'])} | "
+            f"risk={row['predicted_risk'] * 100:.1f}%"
+        ),
+        axis=1,
+    )
+
+    st.sidebar.header("Patient Selection")
+
+    selected_option = st.sidebar.selectbox(
+        "Select ICU stay",
+        dashboard_df["patient_option"],
+    )
+
+    selected_patient = dashboard_df[
+        dashboard_df["patient_option"] == selected_option
+    ].iloc[0]
+
+    patient_features = selected_patient[
+        FEATURE_COLUMNS
+    ].to_frame().T
+
+    final_model_risk = pipeline.predict_proba(
+        patient_features
+    )[0, 1]
+
+    oof_risk = float(selected_patient["predicted_risk"])
+
+    category = risk_category(
+        oof_risk,
+        medium_threshold,
+        high_threshold,
+    )
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric(
+        "Out-of-Fold Risk",
+        f"{oof_risk * 100:.2f}%",
+        help=(
+            "This prediction was produced by a model that did not "
+            "train on this ICU stay."
+        ),
+    )
+
+    col2.metric("Risk Category", category)
+
+    col3.metric(
+        "Actual Outcome",
+        int(selected_patient["hospital_expire_flag"]),
+        help="0 = survived, 1 = hospital mortality",
+    )
+
+    col4.metric(
+        "Final Model Risk",
+        f"{final_model_risk * 100:.2f}%",
+        help=(
+            "This score comes from the final model trained on the "
+            "complete demo dataset."
+        ),
+    )
+
+    st.caption(
+        f"Medium-risk threshold: {medium_threshold:.2f} | "
+        f"High-risk threshold: {high_threshold:.2f} | "
+        f"Validation fold: {int(selected_patient['fold'])}"
+    )
+
+    st.subheader("Patient Information")
+
+    patient_info = {
+        "Subject ID": int(selected_patient["subject_id"]),
+        "Hospital Admission ID": int(selected_patient["hadm_id"]),
+        "ICU Stay ID": int(selected_patient["stay_id"]),
+        "Gender": selected_patient["gender"],
+        "Age": selected_patient["anchor_age"],
+        "Admission Type": selected_patient["admission_type"],
+        "First ICU Unit": selected_patient["first_careunit"],
+    }
+
+    st.dataframe(
+        pd.DataFrame.from_dict(
+            patient_info,
+            orient="index",
+            columns=["Value"],
+        ),
+        use_container_width=True,
+    )
+
+    vital_col, lab_col = st.columns(2)
+
+    with vital_col:
+        st.subheader("First 24-Hour Vitals")
+
+        vital_table = selected_patient[
+            VITAL_COLUMNS
+        ].rename(index=clean_feature_name).to_frame("Value")
+
+        st.dataframe(
+            vital_table,
+            use_container_width=True,
+        )
+
+    with lab_col:
+        st.subheader("First 24-Hour Labs")
+
+        lab_table = selected_patient[
+            LAB_COLUMNS
+        ].rename(index=clean_feature_name).to_frame("Value")
+
+        st.dataframe(
+            lab_table,
+            use_container_width=True,
+        )
+
+    st.subheader("Clinical Warning")
 
     if category == "High Risk":
-        st.warning(
-            "This patient is predicted to be high risk. "
-            "The main contributing features are shown below."
-        )
-    elif category == "Medium Risk":
-        st.info(
-            "This patient is predicted to be medium risk. "
-            "Clinical monitoring may be needed."
-        )
-    else:
-        st.success(
-            "This patient is predicted to be low risk based on the current model."
+        st.error(
+            "This ICU stay is classified as high risk using the "
+            "tuned clinical threshold."
         )
 
-    st.dataframe(top_positive[["feature", "feature_value", "shap_value"]])
+    elif category == "Medium Risk":
+        st.warning(
+            "This ICU stay is classified as medium risk. "
+            "Closer monitoring may be appropriate."
+        )
+
+    else:
+        st.success(
+            "This ICU stay is classified as low risk by the model."
+        )
+
+    st.subheader("SHAP Explanation")
+
+    st.caption(
+        "The SHAP explanation below uses the final model. "
+        "Positive values increase predicted risk and negative values "
+        "decrease predicted risk."
+    )
+
+    shap_df = prepare_shap_explanation(
+        pipeline,
+        patient_features,
+    )
+
+    shap_df["feature"] = shap_df["feature"].apply(
+        clean_feature_name
+    )
+
+    risk_increasing = shap_df[
+        shap_df["shap_value"] > 0
+    ].head(8)
+
+    risk_decreasing = shap_df[
+        shap_df["shap_value"] < 0
+    ].head(8)
+
+    increase_col, decrease_col = st.columns(2)
+
+    with increase_col:
+        st.markdown("#### Risk-Increasing Features")
+        st.dataframe(
+            risk_increasing[
+                ["feature", "feature_value", "shap_value"]
+            ],
+            use_container_width=True,
+        )
+
+    with decrease_col:
+        st.markdown("#### Risk-Decreasing Features")
+        st.dataframe(
+            risk_decreasing[
+                ["feature", "feature_value", "shap_value"]
+            ],
+            use_container_width=True,
+        )
+
+    st.info(
+        "This dashboard is a research demonstration using the "
+        "MIMIC-IV demo dataset and is not intended for clinical use."
+    )
 
 
 if __name__ == "__main__":
