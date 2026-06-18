@@ -127,6 +127,10 @@ AUROC: 0.7833 ± 0.0998
 AUPRC: 0.5357 ± 0.1815
 ```
 
+## Model Comparison Plot
+
+![Repeated cross-validation model comparison](docs/images/model_comparison.png)
+
 ## Out-of-Fold Evaluation
 
 Five-fold out-of-fold predictions were generated so that every ICU stay received a prediction from a model that did not train on that stay.
