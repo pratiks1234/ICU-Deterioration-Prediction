@@ -36,3 +36,7 @@ env/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Demo-trained model used by the public Streamlit app
+!deployment/
+!deployment/xgboost_reduced_clinical_final.joblib
