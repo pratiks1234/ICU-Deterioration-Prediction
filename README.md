@@ -4,6 +4,18 @@ An end-to-end healthcare machine learning project that estimates hospital mortal
 
 This repository represents the completed MVP of a broader ICU deterioration-prediction project. The current model predicts **hospital mortality**, represented by `hospital_expire_flag`, rather than deterioration within a specific future 6-, 12-, or 24-hour window.
 
+## Live Application
+
+[Open the deployed ICU Mortality Risk Demo](https://deployapppy-zbu4ekj45vpwnbsn9okbec.streamlit.app/)
+
+The public application accepts simulated clinical inputs and displays:
+
+- Predicted hospital mortality risk
+- Low, medium, or high demonstration category
+- SHAP-based model explanation
+
+Do not enter real patient information. This application is for research, education, and portfolio demonstration only.
+
 ## Project Overview
 
 The project uses the MIMIC-IV demo dataset to build and compare several XGBoost models:
